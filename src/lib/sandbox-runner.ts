@@ -1,10 +1,7 @@
 import { Sandbox } from "@vercel/sandbox";
 import { LANGUAGE_BOILERPLATES, SupportedLanguage } from "@/lib/language-boilerplate";
 import { adminDb } from "@/lib/firebase-admin";
-import { exec, spawn } from "child_process";
-import fs from "fs/promises";
 import path from "path";
-import os from "os";
 
 export interface SandboxRunRequest {
   language: SupportedLanguage;
@@ -144,104 +141,11 @@ async function runWithVercelSandbox(
       engine: "vercel-sandbox",
     };
   } finally {
-    await sandbox.stop().catch(() => {});
+    await sandbox.stop().catch(() => { });
   }
 }
 
-/**
- * Local sandbox execution fallback for local dev when Vercel credentials are not present.
- */
-async function runWithLocalSandbox(
-  req: SandboxRunRequest
-): Promise<SandboxRunResult> {
-  const timeoutMs = req.timeoutMs || 8000;
-  const config = getExecutionConfig(req.language);
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "dsa-sandbox-"));
 
-  try {
-    const codePath = path.join(tmpDir, config.filename);
-    const inputPath = path.join(tmpDir, "input.txt");
-
-    await fs.writeFile(codePath, req.code, "utf8");
-    await fs.writeFile(inputPath, req.input ?? "", "utf8");
-
-    const startTime = Date.now();
-
-    return await new Promise<SandboxRunResult>((resolve) => {
-      let isTimedOut = false;
-      let child;
-
-      if (req.language === "python") {
-        child = spawn(process.platform === "win32" ? "python" : "python3", [config.filename], { cwd: tmpDir });
-      } else if (req.language === "javascript") {
-        child = spawn("node", [config.filename], { cwd: tmpDir });
-      } else {
-        child = spawn(
-          process.platform === "win32" ? "cmd.exe" : "bash",
-          process.platform === "win32" ? ["/c", config.runScript] : ["-c", config.runScript],
-          { cwd: tmpDir }
-        );
-      }
-
-      if (child.stdin) {
-        child.stdin.write(req.input ?? "");
-        child.stdin.end();
-      }
-
-      let stdout = "";
-      let stderr = "";
-
-      child.stdout?.on("data", (data) => (stdout += data.toString()));
-      child.stderr?.on("data", (data) => (stderr += data.toString()));
-
-      const timer = setTimeout(() => {
-        isTimedOut = true;
-        child.kill("SIGKILL");
-        resolve({
-          stdout: stdout.trim(),
-          stderr: "TIME_LIMIT_EXCEEDED: Execution timed out.",
-          exitCode: 124,
-          execTimeMs: timeoutMs,
-          timedOut: true,
-          engine: "local-sandbox",
-        });
-      }, timeoutMs);
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (isTimedOut) return;
-        const execTimeMs = Date.now() - startTime;
-        resolve({
-          stdout: stdout.trim(),
-          stderr: stderr.trim(),
-          exitCode: code ?? 0,
-          execTimeMs,
-          timedOut: false,
-          engine: "local-sandbox",
-        });
-      });
-
-      child.on("error", (err) => {
-        clearTimeout(timer);
-        resolve({
-          stdout: "",
-          stderr: err.message,
-          exitCode: 1,
-          execTimeMs: Date.now() - startTime,
-          timedOut: false,
-          error: err.message,
-          engine: "local-sandbox",
-        });
-      });
-    });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-/**
- * Unified execution handler: attempts Vercel Sandbox first, falling back to local sandbox for dev.
- */
 export async function runInSandbox(req: SandboxRunRequest): Promise<SandboxRunResult> {
   // If VERCEL_TOKEN, VERCEL_OIDC_TOKEN, or Vercel production environment is available, use Vercel Sandbox
   const hasVercelEnv = Boolean(
@@ -254,20 +158,11 @@ export async function runInSandbox(req: SandboxRunRequest): Promise<SandboxRunRe
   try {
     return await runWithVercelSandbox(req);
   } catch (err: any) {
-    // If credentials are unavailable or in local dev without Vercel link, fallback gracefully
-    const isAuthError =
-      err?.name === "LocalOidcContextError" ||
-      err?.name === "VercelOidcContextError" ||
-      err?.message?.includes("credentials") ||
-      err?.message?.includes("OIDC");
-
-    if (isAuthError || !hasVercelEnv) {
-      console.warn("[SandboxRunner] Running via local sandbox fallback (Vercel Sandbox token not configured locally).");
-      return await runWithLocalSandbox(req);
-    }
-
     console.error("[SandboxRunner] Vercel Sandbox error:", err);
-    throw err;
+    throw new Error(
+      "Failed to execute in Vercel Sandbox. Please ensure you have configured your VERCEL_TOKEN and VERCEL_PROJECT_ID correctly. Details: " +
+      (err.message || String(err))
+    );
   }
 }
 
@@ -390,8 +285,8 @@ export async function processSubmissionJob(req: ExecutionRequest): Promise<Execu
         overallStatus = evaluation.stderr.includes("TIME_LIMIT_EXCEEDED")
           ? "TIME_LIMIT_EXCEEDED"
           : /Compilation Error/i.test(evaluation.stderr)
-          ? "COMPILATION_ERROR"
-          : "RUNTIME_ERROR";
+            ? "COMPILATION_ERROR"
+            : "RUNTIME_ERROR";
         break;
       }
 
