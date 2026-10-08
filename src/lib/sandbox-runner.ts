@@ -1,7 +1,8 @@
 import { Sandbox } from "@vercel/sandbox";
-import { LANGUAGE_BOILERPLATES, SupportedLanguage } from "@/lib/language-boilerplate";
+import { SupportedLanguage } from "@/lib/language-boilerplate";
 import { adminDb } from "@/lib/firebase-admin";
-import path from "path";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SandboxRunRequest {
   language: SupportedLanguage;
@@ -17,15 +18,44 @@ export interface SandboxRunResult {
   execTimeMs: number;
   timedOut: boolean;
   error?: string;
-  engine: "vercel-sandbox" | "local-sandbox";
+  engine: "vercel-sandbox";
 }
 
-export interface SingleTestResult {
-  actualOutput: string;
+/** One test case to run inside the sandbox batch */
+export interface BatchTestCase {
+  /** Parsed arguments to pass to solve() */
+  args: unknown[];
+  /** Expected JSON output string (e.g. "[0,1]"). Empty string = no check. */
+  expected: string;
+}
+
+/** Per-test result returned by the sandbox driver */
+export interface BatchTestCaseResult {
   passed: boolean;
+  actual: string;
+  error?: string;
+  execTimeMs?: number;
+}
+
+/** What the sandbox stdout must look like */
+interface SandboxBatchOutput {
+  results: BatchTestCaseResult[];
+}
+
+export interface BatchRunRequest {
+  language: SupportedLanguage;
+  /** The user's code (just their function body, e.g. def solve(...)) */
+  code: string;
+  /** Driver template from DB — must contain {{USER_CODE}} */
+  driverCode: string;
+  testCases: BatchTestCase[];
+  timeoutMs?: number;
+}
+
+export interface BatchRunResult {
+  results: BatchTestCaseResult[];
   execTimeMs: number;
-  stdout?: string;
-  stderr?: string;
+  engine: "vercel-sandbox";
 }
 
 export interface ExecutionRequest {
@@ -46,15 +76,7 @@ export interface ExecutionResult {
   stderr?: string;
 }
 
-function normalizeOutput(out: string): string {
-  if (!out) return "";
-  const trimmed = out.trim();
-  try {
-    return JSON.stringify(JSON.parse(trimmed));
-  } catch {
-    return trimmed.replace(/\r\n/g, "\n");
-  }
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function normalizeLanguage(language: string): SupportedLanguage {
   const lang = (language || "python").toLowerCase().trim();
@@ -65,62 +87,65 @@ export function normalizeLanguage(language: string): SupportedLanguage {
   return "python";
 }
 
-function getExecutionConfig(lang: SupportedLanguage) {
+/**
+ * Parse a multi-line test case input string into an args array.
+ * e.g. "[2,7,11,15]\n9" → [[2,7,11,15], 9]
+ */
+export function parseInputToArgs(input: string): unknown[] {
+  return input
+    .trim()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return line;
+      }
+    });
+}
+
+function getRunScript(lang: SupportedLanguage): string {
   switch (lang) {
-    case "python":
-      return {
-        filename: "solution.py",
-        runScript: "python3 solution.py < input.txt",
-        localCmd: (dir: string) => `python3 "${path.join(dir, "solution.py")}" < "${path.join(dir, "input.txt")}"`,
-      };
-    case "javascript":
-      return {
-        filename: "solution.js",
-        runScript: "node solution.js < input.txt",
-        localCmd: (dir: string) => `node "${path.join(dir, "solution.js")}" < "${path.join(dir, "input.txt")}"`,
-      };
-    case "cpp":
-      return {
-        filename: "solution.cpp",
-        runScript: "g++ -O3 solution.cpp -o solution && ./solution < input.txt",
-        localCmd: (dir: string) => `g++ -O3 "${path.join(dir, "solution.cpp")}" -o "${path.join(dir, "solution")}" && "${path.join(dir, "solution")}" < "${path.join(dir, "input.txt")}"`,
-      };
-    case "java":
-      return {
-        filename: "Solution.java",
-        runScript: "javac Solution.java && java Solution < input.txt",
-        localCmd: (dir: string) => `javac "${path.join(dir, "Solution.java")}" && java -cp "${dir}" Solution < "${path.join(dir, "input.txt")}"`,
-      };
+    case "python":     return "python3 solution.py < input.txt";
+    case "javascript": return "node solution.js < input.txt";
+    case "cpp":        return "g++ -O2 solution.cpp -o solution && ./solution < input.txt";
+    case "java":       return "javac Solution.java && java Solution < input.txt";
   }
 }
 
-/**
- * Executes code using Vercel Sandbox microVM.
- */
-async function runWithVercelSandbox(
-  req: SandboxRunRequest
-): Promise<SandboxRunResult> {
-  const timeoutMs = req.timeoutMs || 8000;
-  const config = getExecutionConfig(req.language);
+function getSolutionFilename(lang: SupportedLanguage): string {
+  switch (lang) {
+    case "python":     return "solution.py";
+    case "javascript": return "solution.js";
+    case "cpp":        return "solution.cpp";
+    case "java":       return "Solution.java";
+  }
+}
 
-  // Allocate sandbox with slight buffer beyond execution timeout
+// ─── Core Vercel Sandbox Runner ───────────────────────────────────────────────
+
+async function runWithVercelSandbox(req: SandboxRunRequest): Promise<SandboxRunResult> {
+  const timeoutMs = req.timeoutMs || 15000;
+  const filename  = getSolutionFilename(req.language);
+  const runScript = getRunScript(req.language);
+
   const sandbox = await Sandbox.create({
-    timeout: Math.max(timeoutMs + 10000, 20000),
-    resources: {
-      vcpus: 1,
-    },
+    timeout: Math.max(timeoutMs + 10000, 25000),
+    resources: { vcpus: 1 },
   });
 
   const startTime = Date.now();
   try {
     await sandbox.writeFiles([
-      { path: config.filename, content: req.code },
-      { path: "input.txt", content: req.input ?? "" },
+      { path: filename,    content: req.code },
+      { path: "input.txt", content: req.input },
     ]);
 
     const command = await sandbox.runCommand({
       cmd: "bash",
-      args: ["-c", config.runScript],
+      args: ["-c", runScript],
       timeoutMs,
     });
 
@@ -130,7 +155,7 @@ async function runWithVercelSandbox(
     ]);
 
     const execTimeMs = Date.now() - startTime;
-    const exitCode = command.exitCode ?? 0;
+    const exitCode   = command.exitCode ?? 0;
 
     return {
       stdout: stdout.trim(),
@@ -145,164 +170,174 @@ async function runWithVercelSandbox(
   }
 }
 
-
 export async function runInSandbox(req: SandboxRunRequest): Promise<SandboxRunResult> {
-  // If VERCEL_TOKEN, VERCEL_OIDC_TOKEN, or Vercel production environment is available, use Vercel Sandbox
-  const hasVercelEnv = Boolean(
-    process.env.VERCEL_TOKEN ||
-    process.env.VERCEL_OIDC_TOKEN ||
-    process.env.VERCEL_PROJECT_ID ||
-    process.env.VERCEL_URL
-  );
-
   try {
     return await runWithVercelSandbox(req);
   } catch (err: any) {
     console.error("[SandboxRunner] Vercel Sandbox error:", err);
     throw new Error(
-      "Failed to execute in Vercel Sandbox. Please ensure you have configured your VERCEL_TOKEN and VERCEL_PROJECT_ID correctly. Details: " +
+      "Failed to execute in Vercel Sandbox. Please ensure VERCEL_TOKEN and VERCEL_PROJECT_ID are configured. Details: " +
       (err.message || String(err))
     );
   }
 }
 
-/**
- * Evaluate single code snippet against expected output.
- */
-export async function evaluateCodeSnippet(
-  language: string,
-  code: string,
-  input: string,
-  expectedOutput: string,
-  submissionId?: string,
-  dbDriverCode?: string,
-  timeoutMs = 8000
-): Promise<SingleTestResult> {
-  const startTime = Date.now();
-  const lang = normalizeLanguage(language);
-  const boilerplate = LANGUAGE_BOILERPLATES[lang];
-  const fullCode = dbDriverCode?.includes("{{USER_CODE}}")
-    ? dbDriverCode.replace("{{USER_CODE}}", code)
-    : boilerplate?.buildFullCode(code) ?? code;
+// ─── Batch Runner (all test cases in one sandbox call) ────────────────────────
 
-  const result = await runInSandbox({
-    language: lang,
-    code: fullCode,
-    input,
-    timeoutMs,
+/**
+ * Runs ALL test cases inside a single sandbox execution.
+ * The driver code must contain {{USER_CODE}} and must read a JSON payload from
+ * stdin in the shape: { testCases: [{ args: any[], expected: string }] }
+ * and print a JSON object: { results: [{ passed, actual, error? }] }
+ */
+export async function runBatchTestCases(req: BatchRunRequest): Promise<BatchRunResult> {
+  if (!req.driverCode.includes("{{USER_CODE}}")) {
+    throw new Error(
+      "[SandboxRunner] Driver code must contain {{USER_CODE}} placeholder. Update the problem template in the admin panel."
+    );
+  }
+
+  const fullCode = req.driverCode.replace("{{USER_CODE}}", req.code);
+  const payload  = JSON.stringify({ testCases: req.testCases });
+
+  console.log("[SandboxRunner] Batch run | lang:", req.language, "| test cases:", req.testCases.length);
+  console.log("[SandboxRunner] Args per TC:", req.testCases.map(tc => JSON.stringify(tc.args)));
+  console.log("[SandboxRunner] User code (first 400 chars):", req.code.slice(0, 400));
+
+  const sandboxResult = await runInSandbox({
+    language: req.language,
+    code:     fullCode,
+    input:    payload,
+    timeoutMs: req.timeoutMs ?? 20000,
   });
 
-  const execTimeMs = result.execTimeMs || (Date.now() - startTime);
-
-  if (result.timedOut) {
+  if (sandboxResult.timedOut) {
+    // Mark all as TLE
     return {
-      actualOutput: "",
-      passed: false,
-      execTimeMs,
-      stderr: "TIME_LIMIT_EXCEEDED: Execution timed out in sandbox",
+      results: req.testCases.map(() => ({
+        passed: false,
+        actual: "",
+        error: "TIME_LIMIT_EXCEEDED",
+      })),
+      execTimeMs: sandboxResult.execTimeMs,
+      engine: "vercel-sandbox",
     };
   }
 
-  if (result.exitCode !== 0 && result.stderr) {
-    const isCompile = /SyntaxError|javac|g\+\+|undefined reference/i.test(result.stderr);
+  if (!sandboxResult.stdout) {
+    const errMsg = sandboxResult.stderr || "No output from sandbox";
     return {
-      actualOutput: "",
-      passed: false,
-      execTimeMs,
-      stderr: `${isCompile ? "Compilation Error" : "Runtime Error"}: ${result.stderr}`,
+      results: req.testCases.map(() => ({
+        passed: false,
+        actual: "",
+        error: errMsg,
+      })),
+      execTimeMs: sandboxResult.execTimeMs,
+      engine: "vercel-sandbox",
     };
   }
 
-  const actualOutput = result.stdout.trim();
-  const passed = !expectedOutput || expectedOutput === "N/A" || !expectedOutput.trim()
-    ? true
-    : normalizeOutput(actualOutput) === normalizeOutput(expectedOutput);
-
-  return {
-    actualOutput,
-    passed,
-    execTimeMs,
-    stdout: result.stdout,
-    stderr: result.stderr || undefined,
-  };
+  try {
+    const parsed = JSON.parse(sandboxResult.stdout) as SandboxBatchOutput;
+    return {
+      results: parsed.results,
+      execTimeMs: sandboxResult.execTimeMs,
+      engine: "vercel-sandbox",
+    };
+  } catch {
+    // stdout wasn't JSON — surface it as a runtime error for all test cases
+    const errMsg = `Runtime Error: ${sandboxResult.stderr || sandboxResult.stdout}`;
+    return {
+      results: req.testCases.map(() => ({
+        passed: false,
+        actual: "",
+        error: errMsg,
+      })),
+      execTimeMs: sandboxResult.execTimeMs,
+      engine: "vercel-sandbox",
+    };
+  }
 }
 
-/**
- * Evaluates all test cases for a submission job and persists the verdict in Firestore.
- */
+// ─── Submission Job ───────────────────────────────────────────────────────────
+
 export async function processSubmissionJob(req: ExecutionRequest): Promise<ExecutionResult> {
   const startTime = Date.now();
-  console.log(`[SandboxRunner] Processing submission ${req.submissionId} in Vercel Sandbox...`);
+  console.log(`[SandboxRunner] Processing submission ${req.submissionId}...`);
 
-  // Update submission status to RUNNING in Firestore
   await adminDb.collection("submissions").doc(req.submissionId).set(
-    {
-      status: "RUNNING",
-      executionEngine: "vercel-sandbox",
-      updatedAt: new Date().toISOString(),
-    },
+    { status: "RUNNING", executionEngine: "vercel-sandbox", updatedAt: new Date().toISOString() },
     { merge: true }
   );
 
   try {
-    const problemRef = adminDb.collection("problems").doc(req.problemId);
-    const problemDoc = await problemRef.get();
+    const problemDoc = await adminDb.collection("problems").doc(req.problemId).get();
     if (!problemDoc.exists) throw new Error(`Problem ${req.problemId} not found.`);
 
-    const problemData = problemDoc.data() as any;
     const lang = normalizeLanguage(req.language);
-    const dbTemplate = problemData?.templates?.[lang];
+    const dbTemplate = problemDoc.data()?.templates?.[lang];
     const driverCode: string | undefined = dbTemplate?.driverTemplate ?? dbTemplate?.driverCode;
-    const testCasesSnap = await problemRef.collection("testCases").get();
-    const testCases = testCasesSnap.docs.map((doc) => ({
-      id: doc.id,
-      ...(doc.data() as { input: string; output: string }),
-    }));
+
+    if (!driverCode?.includes("{{USER_CODE}}")) {
+      throw new Error(
+        `Problem ${req.problemId} has no valid driver template for ${lang}. ` +
+        "Go to Admin → Edit Problem → Templates and add a driver with {{USER_CODE}}."
+      );
+    }
+
+    const testCasesSnap = await adminDb
+      .collection("problems")
+      .doc(req.problemId)
+      .collection("testCases")
+      .get();
+
+    const testCases: BatchTestCase[] = testCasesSnap.docs.map((doc) => {
+      const data = doc.data() as { input: string; output: string };
+      return {
+        args: parseInputToArgs(data.input || ""),
+        expected: (data.output || "").trim(),
+      };
+    });
+
     const totalTestCases = Math.max(1, testCases.length);
+
+    const batch = await runBatchTestCases({
+      language: lang,
+      code: req.code,
+      driverCode,
+      testCases,
+      timeoutMs: 20000,
+    });
+
     let passedTestCases = 0;
     let overallStatus: ExecutionResult["status"] = "ACCEPTED";
-    let maxExecTime = 0;
     const stdoutLogs: string[] = [];
     const stderrLogs: string[] = [];
 
-    for (let i = 0; i < testCases.length; i++) {
-      const testCase = testCases[i];
-      const evaluation = await evaluateCodeSnippet(
-        req.language,
-        req.code,
-        (testCase.input || "").trim(),
-        (testCase.output || "").trim(),
-        `${req.submissionId}-tc${i}`,
-        driverCode,
-        8000
-      );
-
-      maxExecTime = Math.max(maxExecTime, evaluation.execTimeMs);
-      if (evaluation.stdout) stdoutLogs.push(`[TC ${i + 1}] ${evaluation.stdout}`);
-
-      if (evaluation.stderr) {
-        stderrLogs.push(`Test Case ${i + 1} Error: ${evaluation.stderr}`);
-        overallStatus = evaluation.stderr.includes("TIME_LIMIT_EXCEEDED")
-          ? "TIME_LIMIT_EXCEEDED"
-          : /Compilation Error/i.test(evaluation.stderr)
-            ? "COMPILATION_ERROR"
-            : "RUNTIME_ERROR";
+    for (let i = 0; i < batch.results.length; i++) {
+      const r = batch.results[i];
+      if (r.error) {
+        const isTle = r.error.includes("TIME_LIMIT_EXCEEDED");
+        const isCompile = /SyntaxError|javac|g\+\+|undefined reference/i.test(r.error);
+        overallStatus = isTle ? "TIME_LIMIT_EXCEEDED" : isCompile ? "COMPILATION_ERROR" : "RUNTIME_ERROR";
+        stderrLogs.push(`Test Case ${i + 1} Error: ${r.error}`);
         break;
       }
-
-      if (evaluation.passed) {
+      if (r.passed) {
         passedTestCases++;
-        stdoutLogs.push(`Test Case ${i + 1}: Passed (${evaluation.execTimeMs}ms)`);
+        stdoutLogs.push(`Test Case ${i + 1}: Passed ✓ (actual: ${r.actual})`);
       } else {
         overallStatus = "WRONG_ANSWER";
-        stderrLogs.push(`Test Case ${i + 1}: Expected "${testCase.output || ""}", Got "${evaluation.actualOutput}"`);
+        stderrLogs.push(
+          `Test Case ${i + 1}: Expected "${testCases[i].expected}", Got "${r.actual}"`
+        );
         break;
       }
     }
 
     const result: ExecutionResult = {
       status: overallStatus,
-      execTimeMs: Math.max(maxExecTime, Date.now() - startTime),
+      execTimeMs: Math.max(batch.execTimeMs, Date.now() - startTime),
       memoryUsedKb: 0,
       totalTestCases,
       passedTestCases,
@@ -311,12 +346,7 @@ export async function processSubmissionJob(req: ExecutionRequest): Promise<Execu
     };
 
     await adminDb.collection("submissions").doc(req.submissionId).set(
-      {
-        ...result,
-        stderr: result.stderr || null,
-        executionEngine: "vercel-sandbox",
-        updatedAt: new Date().toISOString(),
-      },
+      { ...result, stderr: result.stderr ?? null, executionEngine: "vercel-sandbox", updatedAt: new Date().toISOString() },
       { merge: true }
     );
 
@@ -324,17 +354,10 @@ export async function processSubmissionJob(req: ExecutionRequest): Promise<Execu
   } catch (err: any) {
     const message = err.message || String(err);
     console.error(`[SandboxRunner] Execution error for ${req.submissionId}:`, err);
-
     await adminDb.collection("submissions").doc(req.submissionId).set(
-      {
-        status: "RUNTIME_ERROR",
-        stderr: message,
-        executionEngine: "vercel-sandbox",
-        updatedAt: new Date().toISOString(),
-      },
+      { status: "RUNTIME_ERROR", stderr: message, executionEngine: "vercel-sandbox", updatedAt: new Date().toISOString() },
       { merge: true }
     );
-
     return {
       status: "RUNTIME_ERROR",
       execTimeMs: Date.now() - startTime,

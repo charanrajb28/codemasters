@@ -6,6 +6,14 @@
  *  - starterCode : the editable template shown in the editor (user writes this)
  *  - label       : display name
  *  - monacoLang  : Monaco editor language id
+ *
+ * ── Batch JSON Protocol ──────────────────────────────────────────────────────
+ * All drivers read ONE JSON payload from stdin:
+ *   { "testCases": [{ "args": [...], "expected": "..." }] }
+ * And print ONE JSON response to stdout:
+ *   { "results": [{ "passed": bool, "actual": "...", "error"?: "..." }] }
+ *
+ * This means the sandbox is invoked ONCE per run/submit (not once per test case).
  */
 
 export type SupportedLanguage = "python" | "cpp" | "java" | "javascript";
@@ -20,78 +28,93 @@ export interface LanguageBoilerplate {
 }
 
 // ─── Python ──────────────────────────────────────────────────────────────────
-const PYTHON_DRIVER = `import json, sys, inspect
+const PYTHON_DRIVER = `import json, sys, time
 
 # ── [USER CODE START] ──
 {{USER_CODE}}
 # ── [USER CODE END] ──
 
-def _parse_input(raw: str):
-    lines = [l.strip() for l in raw.strip().split('\\n') if l.strip()]
-    args = []
-    for line in lines:
+def _run_one(args, expected):
+    try:
+        t0 = time.time()
+        result = solve(*args) if isinstance(args, list) else solve(args)
+        elapsed = int((time.time() - t0) * 1000)
+        actual = json.dumps(result, separators=(",", ":"))
+        if not expected:
+            return {"passed": True, "actual": actual, "execTimeMs": elapsed}
         try:
-            args.append(json.loads(line))
+            exp_norm = json.dumps(json.loads(expected), separators=(",", ":"))
         except Exception:
-            args.append(line)
-    return args
-
-def _invoke(fn, args):
-    sig = inspect.signature(fn)
-    n = len(list(sig.parameters))
-    if n == 0: return fn()
-    if n == 1:
-        if not args:
-            raise ValueError("No input provided for the solution function.")
-        if len(args) >= 2:
-            d = {}
-            names = ["nums","target","s","n","k","root","head","grid","matrix","intervals"]
-            for i,v in enumerate(args):
-                d[names[i] if i < len(names) else f"arg{i}"] = v
-                d[i] = v
-            try: return fn(d)
-            except: pass
-        try: return fn(args)
-        except: pass
-        return fn(args[0])
-    if len(args) < n:
-        raise ValueError(f"Expected {n} input values, received {len(args)}.")
-    return fn(*args[:n])
+            exp_norm = str(expected).strip()
+        return {"passed": actual == exp_norm, "actual": actual, "execTimeMs": elapsed}
+    except Exception as e:
+        return {"passed": False, "actual": "", "error": str(e)}
 
 def main():
-    raw = sys.stdin.read()
-    args = _parse_input(raw)
-    res = None
-    if 'Solution' in globals() and inspect.isclass(Solution):
-        sol = Solution()
-        methods = [m for m in dir(sol) if not m.startswith('_') and callable(getattr(sol,m))]
-        if methods:
-            fn = getattr(sol, methods[0])
-            res = _invoke(fn, args)
-    if res is None:
-        for name in ['solve','solution','twoSum','maxProfit','longestCommonSubsequence']:
-            if name in globals() and callable(globals()[name]):
-                res = _invoke(globals()[name], args)
-                break
-    if res is not None:
-        if isinstance(res, (dict, list, bool, int, float)):
-            print(json.dumps(res))
-        else:
-            print(str(res))
+    payload = json.loads(sys.stdin.read())
+    results = [_run_one(tc["args"], tc.get("expected", "")) for tc in payload["testCases"]]
+    print(json.dumps({"results": results}))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 `;
 
-const PYTHON_STARTER = `class Solution:
-    def twoSum(self, nums: list[int], target: int) -> list[int]:
-        seen = {}
-        for i, num in enumerate(nums):
-            complement = target - num
-            if complement in seen:
-                return [seen[complement], i]
-            seen[num] = i
-        return []
+const PYTHON_STARTER = `def solve(nums: list[int], target: int) -> list[int]:
+    seen = {}
+    for i, num in enumerate(nums):
+        complement = target - num
+        if complement in seen:
+            return [seen[complement], i]
+        seen[num] = i
+    return []
+`;
+
+// ─── JavaScript ───────────────────────────────────────────────────────────────
+const JS_DRIVER = `
+// ── [USER CODE START] ──
+{{USER_CODE}}
+// ── [USER CODE END] ──
+
+async function main() {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks).toString());
+
+    const results = payload.testCases.map(({ args, expected }) => {
+        try {
+            const t0 = Date.now();
+            const result = solve(...args);
+            const elapsed = Date.now() - t0;
+            const actual = JSON.stringify(result);
+            if (!expected) return { passed: true, actual, execTimeMs: elapsed };
+            let expNorm;
+            try { expNorm = JSON.stringify(JSON.parse(expected)); } catch { expNorm = String(expected).trim(); }
+            return { passed: actual === expNorm, actual, execTimeMs: elapsed };
+        } catch (e) {
+            return { passed: false, actual: "", error: String(e.message || e) };
+        }
+    });
+
+    console.log(JSON.stringify({ results }));
+}
+
+main().catch(e => { console.error(e.message); process.exit(1); });
+`;
+
+const JS_STARTER = `/**
+ * @param {number[]} nums
+ * @param {number} target
+ * @return {number[]}
+ */
+function solve(nums, target) {
+    const seen = {};
+    for (let i = 0; i < nums.length; i++) {
+        const comp = target - nums[i];
+        if (seen[comp] !== undefined) return [seen[comp], i];
+        seen[nums[i]] = i;
+    }
+    return [];
+}
 `;
 
 // ─── C++ ─────────────────────────────────────────────────────────────────────
@@ -102,8 +125,7 @@ using namespace std;
 {{USER_CODE}}
 // ── [USER CODE END] ──
 
-// ── Driver: reads input line-by-line, calls Solution, prints JSON output ──
-string toJson(vector<int>& v) {
+string toJsonArray(vector<int>& v) {
     string s = "[";
     for (int i = 0; i < (int)v.size(); i++) {
         s += to_string(v[i]);
@@ -122,20 +144,50 @@ vector<int> parseIntArray(const string& s) {
     return v;
 }
 
+struct TC { vector<int> nums; int target; string expected; };
+
 int main() {
     ios_base::sync_with_stdio(false);
     cin.tie(NULL);
+    string raw((istreambuf_iterator<char>(cin)), istreambuf_iterator<char>());
 
-    string line1, line2;
-    if (!getline(cin, line1)) return 0;
-    getline(cin, line2);
+    vector<TC> tcs;
+    size_t pos = 0;
+    while ((pos = raw.find("\\"args\\":", pos)) != string::npos) {
+        pos += 8;
+        int depth = 0; size_t start = pos;
+        while (pos < raw.size()) {
+            if (raw[pos]=='[') depth++;
+            else if (raw[pos]==']') { depth--; if(!depth){pos++;break;} }
+            pos++;
+        }
+        string argsJson = raw.substr(start, pos-start);
+        string exp = "";
+        size_t epos = raw.find("\\"expected\\":", pos);
+        if (epos != string::npos && epos < raw.find("},", pos)) {
+            epos += 12;
+            size_t q1 = raw.find("\\"", epos), q2 = raw.find("\\"", q1+1);
+            if (q1!=string::npos && q2!=string::npos) exp = raw.substr(q1+1, q2-q1-1);
+        }
+        TC tc; tc.expected = exp;
+        size_t arrS = argsJson.find('[',1), arrE = argsJson.find(']',arrS);
+        tc.nums = parseIntArray(argsJson.substr(arrS, arrE-arrS+1));
+        size_t c = argsJson.find(',',arrE), cl = argsJson.rfind(']');
+        tc.target = stoi(argsJson.substr(c+1, cl-c-1));
+        tcs.push_back(tc);
+    }
 
-    vector<int> nums = parseIntArray(line1);
-    int target = stoi(line2);
-
+    cout << "{\\"results\\":[";
     Solution sol;
-    auto result = sol.twoSum(nums, target);
-    cout << toJson(result) << endl;
+    for (int i = 0; i < (int)tcs.size(); i++) {
+        auto& tc = tcs[i];
+        auto res = sol.twoSum(tc.nums, tc.target);
+        string actual = toJsonArray(res);
+        string passed = (tc.expected.empty() || actual==tc.expected) ? "true":"false";
+        cout << "{\\"passed\\":" << passed << ",\\"actual\\":\\"" << actual << "\\"}";
+        if (i+1<(int)tcs.size()) cout << ",";
+    }
+    cout << "]}" << endl;
     return 0;
 }
 `;
@@ -143,7 +195,7 @@ int main() {
 const CPP_STARTER = `class Solution {
 public:
     vector<int> twoSum(vector<int>& nums, int target) {
-        unordered_map<int, int> seen;
+        unordered_map<int,int> seen;
         for (int i = 0; i < (int)nums.size(); i++) {
             int comp = target - nums[i];
             if (seen.count(comp)) return {seen[comp], i};
@@ -162,7 +214,7 @@ import java.io.*;
 {{USER_CODE}}
 // ── [USER CODE END] ──
 
-public class Main {
+public class Solution {
     static int[] parseIntArray(String s) {
         s = s.trim().replaceAll("[\\\\[\\\\]\\\\s]", "");
         if (s.isEmpty()) return new int[0];
@@ -171,34 +223,57 @@ public class Main {
         for (int i = 0; i < parts.length; i++) arr[i] = Integer.parseInt(parts[i].trim());
         return arr;
     }
-
     static String toJson(int[] arr) {
         StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < arr.length; i++) {
-            sb.append(arr[i]);
-            if (i + 1 < arr.length) sb.append(",");
-        }
+        for (int i = 0; i < arr.length; i++) { sb.append(arr[i]); if(i+1<arr.length)sb.append(","); }
         return sb.append("]").toString();
     }
-
     public static void main(String[] args) throws Exception {
         BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-        String line1 = br.readLine();
-        String line2 = br.readLine();
-
-        int[] nums = parseIntArray(line1);
-        int target = Integer.parseInt(line2.trim());
-
-        Solution sol = new Solution();
-        int[] result = sol.twoSum(nums, target);
-        System.out.println(toJson(result));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line=br.readLine())!=null) sb.append(line);
+        String raw = sb.toString();
+        List<String> argsList=new ArrayList<>(), expList=new ArrayList<>();
+        int pos=0;
+        while(true){
+            int ai=raw.indexOf("\\"args\\":",pos); if(ai<0)break; ai+=8;
+            int depth=0,start=ai;
+            while(ai<raw.length()){
+                if(raw.charAt(ai)=='[')depth++;
+                else if(raw.charAt(ai)==']'){depth--;if(depth==0){ai++;break;}}
+                ai++;
+            }
+            argsList.add(raw.substring(start,ai));
+            int ei=raw.indexOf("\\"expected\\":",ai); String exp="";
+            if(ei>=0&&ei<raw.indexOf("}",ai)){
+                ei+=12; int q1=raw.indexOf('"',ei),q2=raw.indexOf('"',q1+1);
+                if(q1>=0&&q2>=0)exp=raw.substring(q1+1,q2);
+            }
+            expList.add(exp); pos=ai;
+        }
+        Solution sol=new Solution();
+        StringBuilder out=new StringBuilder("{\\"results\\":[");
+        for(int i=0;i<argsList.size();i++){
+            String aj=argsList.get(i);
+            int as=aj.indexOf('[',1),ae=aj.indexOf(']',as);
+            int[]nums=parseIntArray(aj.substring(as,ae+1));
+            int co=aj.indexOf(',',ae),cl=aj.lastIndexOf(']');
+            int target=Integer.parseInt(aj.substring(co+1,cl).trim());
+            int[]res=sol.twoSum(nums,target);
+            String actual=toJson(res),ex=expList.get(i);
+            boolean passed=ex.isEmpty()||actual.equals(ex);
+            out.append("{\\"passed\\":").append(passed).append(",\\"actual\\":\\"").append(actual).append("\\"}");
+            if(i+1<argsList.size())out.append(",");
+        }
+        System.out.println(out.append("]}"));
     }
 }
 `;
 
 const JAVA_STARTER = `class Solution {
     public int[] twoSum(int[] nums, int target) {
-        Map<Integer, Integer> seen = new HashMap<>();
+        Map<Integer,Integer> seen = new HashMap<>();
         for (int i = 0; i < nums.length; i++) {
             int comp = target - nums[i];
             if (seen.containsKey(comp)) return new int[]{seen.get(comp), i};
@@ -209,112 +284,15 @@ const JAVA_STARTER = `class Solution {
 }
 `;
 
-// ─── JavaScript ───────────────────────────────────────────────────────────────
-const JS_DRIVER = `const readline = require('readline');
-
-// ── [USER CODE START] ──
-{{USER_CODE}}
-// ── [USER CODE END] ──
-
-async function main() {
-    const rl = readline.createInterface({ input: process.stdin });
-    const lines = [];
-    for await (const line of rl) {
-        const trimmed = line.trim();
-        if (trimmed) lines.push(trimmed);
-    }
-
-    const args = lines.map(l => {
-        try { return JSON.parse(l); } catch { return l; }
-    });
-
-    let res = null;
-    if (typeof Solution === 'function') {
-        const sol = new Solution();
-        const proto = Object.getPrototypeOf(sol);
-        const methods = Object.getOwnPropertyNames(proto)
-            .filter(m => m !== 'constructor' && typeof sol[m] === 'function');
-        if (methods.length > 0) {
-            const fn = (...a) => sol[methods[0]](...a);
-            res = args.length >= fn.length ? fn(...args) : fn(args);
-        }
-    }
-    if (res === null) {
-        // User functions are module-scoped in Node, not properties of global.
-        // Resolve the known entry points lexically so starter code such as
-        // A function twoSum(...) starter is actually invoked.
-        const candidates = [];
-        if (typeof twoSum === 'function') candidates.push(twoSum);
-        if (typeof solve === 'function') candidates.push(solve);
-        if (typeof solution === 'function') candidates.push(solution);
-        if (typeof maxProfit === 'function') candidates.push(maxProfit);
-        if (candidates.length === 0) throw new Error('No supported solution function found.');
-        res = candidates[0](...args);
-    }
-    if (res === null || res === undefined) throw new Error('Solution returned no output.');
-    console.log(typeof res === 'object' ? JSON.stringify(res) : String(res));
-}
-
-main().catch(e => { console.error(e.message); process.exit(1); });
-`;
-
-const JS_STARTER = `/**
- * @param {number[]} nums
- * @param {number} target
- * @return {number[]}
- */
-function twoSum(nums, target) {
-    const seen = {};
-    for (let i = 0; i < nums.length; i++) {
-        const comp = target - nums[i];
-        if (seen[comp] !== undefined) return [seen[comp], i];
-        seen[nums[i]] = i;
-    }
-    return [];
-}
-`;
-
 // ─── Registry ─────────────────────────────────────────────────────────────────
-
-const SIMPLE_PYTHON_DRIVER = `import json, sys
-
-{{USER_CODE}}
-
-def main():
-    values = []
-    for line in sys.stdin:
-        line = line.strip()
-        if line:
-            values.append(json.loads(line))
-
-    if "solve" not in globals():
-        raise RuntimeError("Define a solve(...) function in the editor.")
-
-    result = solve(*values)
-    print(json.dumps(result, separators=(",", ":")))
-
-if __name__ == "__main__":
-    main()
-`;
-
-const SIMPLE_PYTHON_STARTER = `def solve(nums, target):
-    seen = {}
-    for i, value in enumerate(nums):
-        complement = target - value
-        if complement in seen:
-            return [seen[complement], i]
-        seen[value] = i
-    return []
-`;
 
 export const LANGUAGE_BOILERPLATES: Record<SupportedLanguage, LanguageBoilerplate> = {
   python: {
     label: "Python 3.12",
     monacoLang: "python",
-    starterCode: SIMPLE_PYTHON_STARTER,
-    // Keep the marker so database-stored templates can inject the submitted code.
-    driverCode: SIMPLE_PYTHON_DRIVER,
-    buildFullCode: (userCode) => SIMPLE_PYTHON_DRIVER.replace("{{USER_CODE}}", userCode),
+    starterCode: PYTHON_STARTER,
+    driverCode: PYTHON_DRIVER.replace("{{USER_CODE}}", "# (user code goes here)"),
+    buildFullCode: (userCode) => PYTHON_DRIVER.replace("{{USER_CODE}}", userCode),
   },
   cpp: {
     label: "C++ 17",

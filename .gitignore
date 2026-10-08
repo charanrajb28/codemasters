@@ -6,3 +6,5 @@
 .env
 .env.txt
 .env.local
+.vercel
+.env*

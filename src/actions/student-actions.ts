@@ -2,7 +2,7 @@
 
 import { adminDb } from "@/lib/firebase-admin";
 import { getSession } from "@/lib/session";
-import { evaluateCodeSnippet, processSubmissionJob } from "@/lib/sandbox-runner";
+import { runBatchTestCases, parseInputToArgs, processSubmissionJob, normalizeLanguage } from "@/lib/sandbox-runner";
 
 export interface StudentProblemFilterParams {
   search?: string;
@@ -136,59 +136,46 @@ export async function runSampleTestCasesAction(
   customInput?: string | string[]
 ) {
   try {
-    const normalizedLanguage = language.toLowerCase() === "py" ? "python" : language.toLowerCase();
+    const lang = normalizeLanguage(language);
     const problemDoc = await adminDb.collection("problems").doc(problemId).get();
-    const dbTemplate = problemDoc.data()?.templates?.[normalizedLanguage];
-    const dbDriverCode = (dbTemplate?.driverTemplate ?? dbTemplate?.driverCode) as string | undefined;
+    const dbTemplate = problemDoc.data()?.templates?.[lang];
+    const driverCode = (dbTemplate?.driverTemplate ?? dbTemplate?.driverCode) as string | undefined;
 
-    if (Array.isArray(customInput)) {
-      // Run every editor tab, including unsaved custom cases, in the Sandbox.
-      const results = await Promise.all(
-        customInput.map(async (input, idx) => {
-          const res = await evaluateCodeSnippet(language, code, input, "", `custom-${idx}`, dbDriverCode);
-          return {
-            id: `custom-${idx + 1}`,
-            input,
-            expectedOutput: "",
-            actualOutput: res.actualOutput || (res.stderr ? "" : "No Output"),
-            passed: !res.stderr,
-            execTimeMs: res.execTimeMs,
-            stdout: res.stdout || `Execution finished in ${res.execTimeMs}ms.`,
-            stderr: res.stderr || "",
-          };
-        })
-      );
+    if (!driverCode?.includes("{{USER_CODE}}")) {
       return {
-        success: true,
-        data: { isCustom: true, results },
+        success: false,
+        error: `No driver template configured for ${lang}. Please add one in the Admin panel with a {{USER_CODE}} placeholder.`,
       };
     }
 
-    if (typeof customInput === "string" && customInput.trim() !== "") {
-      // Single custom input fallback.
-      const res = await evaluateCodeSnippet(language, code, customInput, "", "custom", dbDriverCode);
-      const actualOutput = res.actualOutput || (res.stderr ? "" : "No Output");
-      return {
-        success: true,
-        data: {
-          isCustom: true,
-          results: [
-            {
-              id: "custom",
-              input: customInput,
-              expectedOutput: "",
-              actualOutput,
-              passed: !res.stderr,
-              execTimeMs: res.execTimeMs,
-              stdout: res.stdout || `Execution finished in ${res.execTimeMs}ms.`,
-              stderr: res.stderr || "",
-            },
-          ],
-        },
-      };
+    // ── Custom inputs (user-typed tabs) ──────────────────────────────────────
+    if (customInput !== undefined) {
+      const inputs = Array.isArray(customInput) ? customInput : [customInput];
+      const testCases = inputs.map((inp) => ({
+        args: parseInputToArgs(inp),
+        expected: "",
+      }));
+
+      const batch = await runBatchTestCases({ language: lang, code, driverCode, testCases });
+
+      const results = inputs.map((inp, idx) => {
+        const r = batch.results[idx] ?? { passed: false, actual: "", error: "No result" };
+        return {
+          id: `custom-${idx + 1}`,
+          input: inp,
+          expectedOutput: "",
+          actualOutput: r.actual || "",
+          passed: r.passed,
+          execTimeMs: r.execTimeMs ?? batch.execTimeMs,
+          stdout: r.actual ? `Output: ${r.actual}` : "",
+          stderr: r.error || "",
+        };
+      });
+
+      return { success: true, data: { isCustom: true, results } };
     }
 
-    // Stored sample test cases: run all non-hidden ones
+    // ── Stored sample test cases (non-hidden) ─────────────────────────────────
     const testCasesSnap = await adminDb
       .collection("problems")
       .doc(problemId)
@@ -196,29 +183,36 @@ export async function runSampleTestCasesAction(
       .where("isHidden", "==", false)
       .get();
 
-    // Run all visible sample test cases in parallel via Sandbox
-    const results = await Promise.all(
-      testCasesSnap.docs.map(async (tc, idx) => {
-        const { input } = tc.data() as { input: string; output: string };
-        const res = await evaluateCodeSnippet(language, code, input, "", `sample-${idx}`, dbDriverCode);
-        const actualOutput = res.actualOutput || (res.stderr ? "" : "No Output");
-        return {
-          id: tc.id ?? `sample-${idx + 1}`,
-          input,
-          expectedOutput: "",
-          actualOutput,
-          passed: !res.stderr,
-          execTimeMs: res.execTimeMs,
-          stdout: res.stdout || `Sample test case ${idx + 1} processed.`,
-          stderr: res.stderr || "",
-        };
-      })
-    );
+    const tcDocs = testCasesSnap.docs;
+    const testCases = tcDocs.map((tc) => {
+      const data = tc.data() as { input: string; output: string };
+      return {
+        args: parseInputToArgs(data.input || ""),
+        expected: (data.output || "").trim(),
+      };
+    });
+
+    const batch = await runBatchTestCases({ language: lang, code, driverCode, testCases });
+
+    const results = tcDocs.map((tc, idx) => {
+      const data = tc.data() as { input: string; output: string };
+      const r = batch.results[idx] ?? { passed: false, actual: "", error: "No result" };
+      return {
+        id: tc.id ?? `sample-${idx + 1}`,
+        input: data.input,
+        expectedOutput: data.output || "",
+        actualOutput: r.actual || "",
+        passed: r.passed,
+        execTimeMs: r.execTimeMs ?? batch.execTimeMs,
+        stdout: r.passed ? `Test Case ${idx + 1}: Passed ✓` : `Test Case ${idx + 1}: Wrong Answer`,
+        stderr: r.error || "",
+      };
+    });
 
     return { success: true, data: { isCustom: false, results } };
   } catch (err) {
     console.error("runSampleTestCasesAction error:", err);
-    return { success: false, error: "Failed to run test cases." };
+    return { success: false, error: String((err as Error).message || err) };
   }
 }
 
