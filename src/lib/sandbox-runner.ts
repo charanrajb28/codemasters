@@ -110,8 +110,8 @@ function getRunScript(lang: SupportedLanguage): string {
   switch (lang) {
     case "python":     return "python3 solution.py < input.txt";
     case "javascript": return "node solution.js < input.txt";
-    case "cpp":        return "g++ -O2 solution.cpp -o solution && ./solution < input.txt";
-    case "java":       return "javac Solution.java && java Solution < input.txt";
+    case "cpp":        return "if ! command -v g++ &> /dev/null; then sudo apt-get update -qq > /dev/null 2>&1 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq g++ > /dev/null 2>&1; fi && g++ -O2 solution.cpp -o solution && ./solution < input.txt";
+    case "java":       return "if ! command -v javac &> /dev/null; then sudo apt-get update -qq > /dev/null 2>&1 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq default-jdk-headless > /dev/null 2>&1; fi && javac Solution.java && java Main < input.txt";
   }
 }
 
@@ -127,13 +127,18 @@ function getSolutionFilename(lang: SupportedLanguage): string {
 // ─── Core Vercel Sandbox Runner ───────────────────────────────────────────────
 
 async function runWithVercelSandbox(req: SandboxRunRequest): Promise<SandboxRunResult> {
-  const timeoutMs = req.timeoutMs || 15000;
+  const defaultTimeout = (req.language === "java" || req.language === "cpp") ? 45000 : 15000;
+  const timeoutMs = req.timeoutMs || defaultTimeout;
   const filename  = getSolutionFilename(req.language);
   const runScript = getRunScript(req.language);
 
   const sandbox = await Sandbox.create({
+    token: process.env.VERCEL_TOKEN,
+    projectId: process.env.VERCEL_PROJECT_ID,
+    teamId: process.env.VERCEL_TEAM_ID,
     timeout: Math.max(timeoutMs + 10000, 25000),
     resources: { vcpus: 1 },
+    persistent: false, // Prevents Vercel from taking a snapshot when stopped
   });
 
   const startTime = Date.now();
@@ -208,7 +213,7 @@ export async function runBatchTestCases(req: BatchRunRequest): Promise<BatchRunR
     language: req.language,
     code:     fullCode,
     input:    payload,
-    timeoutMs: req.timeoutMs ?? 20000,
+    timeoutMs: req.timeoutMs,
   });
 
   if (sandboxResult.timedOut) {

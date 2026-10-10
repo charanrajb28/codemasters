@@ -357,7 +357,7 @@ export const LaptopScrollHero: React.FC<LaptopScrollHeroProps> = ({ session }) =
 
                 <div style={{ fontSize: "12px", fontFamily: "'JetBrains Mono', monospace", color: "#a1a1aa", display: "flex", alignItems: "center", gap: "8px" }}>
                   <Terminal size={14} style={{ color: "#34d399" }} />
-                  <span>two_sum.py — Python 3.11 Runtime (AWS EKS Worker Pod)</span>
+                  <span>two_sum.py — Python 3.11 Runtime (Vercel Sandbox)</span>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>

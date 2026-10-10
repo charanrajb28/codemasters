@@ -256,7 +256,7 @@ export function MonacoCodeEditor({
               <Info style={{ width: 14, height: 14, color: "#34d399", flexShrink: 0, marginTop: 2 }} />
               <span style={{ fontSize: "11px", color: "#6b7280", lineHeight: 1.5, fontFamily: "monospace" }}>
                 This driver code is automatically prepended to your solution before execution on{" "}
-                <span style={{ color: "#34d399" }}>AWS EKS Kubernetes</span>.
+                <span style={{ color: "#34d399" }}>Vercel Sandbox</span>.
                 It handles reading stdin, parsing inputs, calling your function, and printing the output as JSON.
                 <br />
                 <span style={{ color: "#d1d5db" }}>You only need to write the function body shown in the editor below.</span>

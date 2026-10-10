@@ -60,7 +60,7 @@ export function SplitPaneWorkspace({ problem, initialSubmissions }: SplitPaneWor
   const [activeLeftTab, setActiveLeftTab] = useState<"description" | "submissions" | "editorial" | "result">("description");
   const [language, setLanguage] = useState<SupportedLanguage>("python");
   const [code, setCode] = useState<string>(STARTER_TEMPLATES.python);
-  const [customInput, setCustomInput] = useState<string>("");
+  const [customInputs, setCustomInputs] = useState<string[]>([]);
 
   // Resizable Pane Sizes
   const [leftWidthPercent, setLeftWidthPercent] = useState<number>(42);
@@ -179,7 +179,8 @@ export function SplitPaneWorkspace({ problem, initialSubmissions }: SplitPaneWor
     setIsDrawerOpen(true);
 
     try {
-      const res = await runSampleTestCasesAction(problem.id, language, code, customIn);
+      const inputsToRun = customIn || (customInputs.length > 0 ? customInputs : undefined);
+      const res = await runSampleTestCasesAction(problem.id, language, code, inputsToRun);
       if (res.success && res.data) {
         setTestResults(res.data.results as SampleTestResult[]);
       }
@@ -655,8 +656,8 @@ export function SplitPaneWorkspace({ problem, initialSubmissions }: SplitPaneWor
                 testResults={testResults}
                 isRunning={isRunningTests}
                 onRunTestCases={handleRunCode}
-                customInput={customInput}
-                onCustomInputChange={setCustomInput}
+                customInputs={customInputs}
+                onCustomInputsChange={setCustomInputs}
                 paramCount={problem.paramCount}
                 paramNames={problem.paramNames}
                 jsRunner={activeJsRunner}

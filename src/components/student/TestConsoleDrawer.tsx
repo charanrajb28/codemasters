@@ -27,8 +27,8 @@ interface TestConsoleDrawerProps {
   testResults: SampleTestResult[] | null;
   isRunning: boolean;
   onRunTestCases: (customInput?: string | string[]) => void;
-  customInput: string;
-  onCustomInputChange: (val: string) => void;
+  customInputs: string[];
+  onCustomInputsChange: (val: string[]) => void;
   paramCount?: number;
   paramNames?: string[];
   jsRunner?: string;
@@ -42,8 +42,8 @@ export function TestConsoleDrawer({
   testResults,
   isRunning,
   onRunTestCases,
-  customInput,
-  onCustomInputChange,
+  customInputs,
+  onCustomInputsChange,
   paramCount = 2,
   paramNames = ["nums", "target"],
   jsRunner,
@@ -122,7 +122,7 @@ export function TestConsoleDrawer({
   // Sync parent customInput when active tab / params change
   useEffect(() => {
     const cur = testCases[activeTab] || testCases[0];
-    if (cur) onCustomInputChange(cur.params.join("\n"));
+    onCustomInputsChange(testCases.map((tc) => tc.params.join("\n")));
   }, [activeTab, testCases]);
 
   /**

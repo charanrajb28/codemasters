@@ -243,7 +243,7 @@ export const TopNav: React.FC<TopNavProps> = ({ user }) => {
                   DSA<span style={{ color: "#34d399" }}>RUNNER</span>
                 </span>
                 <span style={{ fontSize: 10, fontFamily: "monospace", color: "#525252", lineHeight: 1.2 }}>
-                  AWS EKS Platform
+                  Vercel Sandbox
                 </span>
               </div>
             </Link>
