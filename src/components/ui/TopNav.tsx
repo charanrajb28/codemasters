@@ -7,10 +7,8 @@ import {
   Terminal,
   LayoutDashboard,
   Code2,
-  History,
   ShieldAlert,
   ShieldCheck,
-  Activity,
   LogIn,
   LogOut,
   Menu,
@@ -42,7 +40,6 @@ export const TopNav: React.FC<TopNavProps> = ({ user }) => {
 
   const navItems = [
     { label: "Problems", href: "/problems", icon: <Code2 style={{ width: 16, height: 16 }} /> },
-    { label: "Submissions", href: "/submissions", icon: <History style={{ width: 16, height: 16 }} /> },
   ];
 
   if (user?.role === "ADMIN" || pathname?.startsWith("/admin")) {
@@ -161,8 +158,6 @@ export const TopNav: React.FC<TopNavProps> = ({ user }) => {
     display: "flex",
     alignItems: "center",
     gap: 12,
-    paddingLeft: 12,
-    borderLeft: "1px solid #262626",
   };
 
   const avatarStyle: React.CSSProperties = {
@@ -265,15 +260,9 @@ export const TopNav: React.FC<TopNavProps> = ({ user }) => {
             )}
           </div>
 
-          {/* ── Right: Status + User (desktop) ── */}
+          {/* ── Right: User (desktop) ── */}
           {!isMobile && (
             <div style={rightSectionStyle}>
-              {/* EKS Status pill */}
-              <div style={statusPillStyle}>
-                <Activity style={{ width: 13, height: 13, color: "#34d399" }} />
-                <span>EKS Operational</span>
-              </div>
-
               {user ? (
                 <div style={userSectionStyle}>
                   <Link
@@ -366,15 +355,8 @@ export const TopNav: React.FC<TopNavProps> = ({ user }) => {
             ))}
           </nav>
 
-          {/* Divider + Status + User */}
+          {/* Divider + User */}
           <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #1a1a1a", display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, fontFamily: "monospace", color: "#525252", padding: "0 4px" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Activity style={{ width: 13, height: 13, color: "#34d399" }} /> System Status
-              </span>
-              <span style={{ color: "#34d399" }}>EKS Operational</span>
-            </div>
-
             {user ? (
               <Link
                 href={user.role === "ADMIN" ? "/admin" : "/dashboard"}
