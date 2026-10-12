@@ -16,8 +16,8 @@ export const GreenSquareGridBackground: React.FC = () => {
     let width = 0;
     let height = 0;
 
-    const tileSize = 52; // Bigger boxes in px
-    const tileGap = 10;  // Wider gap between boxes in px
+    const tileSize = 20; // Smaller boxes
+    const tileGap = 4;   // Smaller gap
     const step = tileSize + tileGap;
 
     const resize = () => {
@@ -30,16 +30,16 @@ export const GreenSquareGridBackground: React.FC = () => {
 
     // Refined green color palette for crystal-clear text contrast
     const TIER_COLORS = [
-      { fill: "#021a10", stroke: "rgba(4, 47, 30, 0.4)", shadow: "rgba(0, 0, 0, 0.85)" },  // Layer 0: Darkest (100% area)
-      { fill: "#043d2c", stroke: "rgba(16, 185, 129, 0.3)", shadow: "rgba(0, 0, 0, 0.75)" }, // Layer 1: Mid-Dark (60% area)
-      { fill: "#047857", stroke: "rgba(52, 211, 153, 0.4)", shadow: "rgba(0, 0, 0, 0.65)" }, // Layer 2: Brighter (40% area)
-      { fill: "#10b981", stroke: "rgba(110, 231, 183, 0.7)", shadow: "rgba(0, 0, 0, 0.55)" },// Layer 3: Brightest Neon (20% area, bottom-right)
+      { fill: "#021a10", stroke: "rgba(4, 47, 30, 0.4)", shadow: "rgba(0, 0, 0, 0.85)" },  // Layer 0: Darkest
+      { fill: "#043d2c", stroke: "rgba(16, 185, 129, 0.3)", shadow: "rgba(0, 0, 0, 0.75)" }, // Layer 1: Mid-Dark
+      { fill: "#047857", stroke: "rgba(52, 211, 153, 0.5)", shadow: "rgba(0, 0, 0, 0.65)" }, // Layer 2: Brighter
+      { fill: "#34d399", stroke: "rgba(110, 231, 183, 1)", shadow: "rgba(0, 0, 0, 0.55)" },// Layer 3: Brightest Neon
     ];
 
     const startTime = performance.now();
 
     const render = (now: number) => {
-      const elapsed = (now - startTime) * 0.0012; // Time in seconds
+      const elapsed = (now - startTime) * 0.0005; // Reduced from 0.0012 for slower, majestic wave
 
       const cols = Math.ceil(width / step);
       const rows = Math.ceil(height / step);
@@ -57,36 +57,57 @@ export const GreenSquareGridBackground: React.FC = () => {
           const distFromCorner = Math.hypot(relC, relR);
           const rawProximity = Math.max(0, 1 - distFromCorner / 1.35);
 
-          // Organic 2D noise per tile to prevent linear streak lines
+          // Fluid cohesive wave ("school of fish" / ocean wave)
+          const freqX = c * 0.08;
+          const freqY = r * 0.08;
+          
+          const wave1 = Math.sin(freqX + elapsed * 1.5);
+          const wave2 = Math.cos(freqY - elapsed * 1.1);
+          const wave3 = Math.sin((freqX + freqY) * 0.6 - elapsed * 1.8);
+          
+          // Combined fluid wave normalized from 0.0 to 1.0
+          const fluidWave = (wave1 + wave2 + wave3 + 3) / 6;
+
+          // Merge proximity with the fluid wave to determine the macro intensity
+          const organicScore = Math.max(0, Math.min(1, rawProximity * 0.55 + fluidWave * 0.65));
+
+          // "not all boxes in pattern will have active colour" - only 45% of boxes can blink
           const hashSeed = Math.sin(c * 127.1 + r * 311.7) * 43758.5453;
           const pseudoRand = hashSeed - Math.floor(hashSeed);
-          const noiseJitter = (pseudoRand - 0.5) * 0.26;
+          const isActiveBox = pseudoRand > 0.55;
 
-          const organicScore = Math.max(0, Math.min(1, rawProximity + noiseJitter));
-
-          // Determine layer tier for tile (0: 100%, 1: 60%, 2: 40%, 3: 20%)
+          // Default state: bottom-most layer
           let tier = 0;
-          if (organicScore >= 0.72) tier = 3;
-          else if (organicScore >= 0.48) tier = 2;
-          else if (organicScore >= 0.26) tier = 1;
+          let opacity = 0.08; 
+
+          if (isActiveBox) {
+            // "blinking and movement of the school should be at same speed"
+            // The blink phase uses a similar time multiplier as the wave
+            const blinkPhase = Math.sin(elapsed * 2.0 + pseudoRand * Math.PI * 2);
+            
+            // "blinking makes the movement effect"
+            // The box only blinks ON if the macro wave is over it AND its blink phase is positive
+            if (blinkPhase > 0) {
+              const blinkIntensity = blinkPhase * organicScore;
+
+              // "blinking is from the current colour and colour at bottom most"
+              // Discrete steps instead of smooth fades to create a true "blink" effect
+              // Removed the brightest tier (tier 3) per user request
+              if (blinkIntensity > 0.4) {
+                tier = 2;
+                opacity = 0.5;
+              } else if (blinkIntensity > 0.15) {
+                tier = 1;
+                opacity = 0.3;
+              }
+            }
+          }
 
           const colorConfig = TIER_COLORS[tier];
           const x = c * step + tileGap / 2;
           const y = r * step + tileGap / 2;
 
-          // Organic wave formation originating from bottom-right corner
-          const wavePhase = (1 - organicScore) * 8.0 + noiseJitter * 2.5 - elapsed * 1.6;
-          const waveVal = (Math.sin(wavePhase) + 1) / 2; // 0.0 to 1.0
-
-          // Time-varying random flicker per tile
-          const flickerSpeed = 0.8 + pseudoRand * 1.2;
-          const flickerVal = (Math.sin(elapsed * flickerSpeed + pseudoRand * 10) + 1) / 2;
-
-          // Controlled tile opacity to ensure maximum text readability
-          const baseAlpha = tier === 3 ? 0.60 : tier === 2 ? 0.40 : tier === 1 ? 0.24 : 0.12;
-          const opacity = baseAlpha * (0.35 + 0.65 * (waveVal * 0.6 + flickerVal * 0.4));
-
-          ctx.globalAlpha = Math.min(Math.max(opacity, 0.04), 0.75);
+          ctx.globalAlpha = opacity;
 
           // Simulated drop shadow (fast 0ms performance)
           ctx.fillStyle = colorConfig.shadow;
@@ -100,12 +121,6 @@ export const GreenSquareGridBackground: React.FC = () => {
           ctx.strokeStyle = colorConfig.stroke;
           ctx.lineWidth = 1;
           ctx.strokeRect(x, y, tileSize, tileSize);
-
-          // Specular highlight for top neon layer
-          if (tier === 3) {
-            ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-            ctx.fillRect(x + 4, y + 4, tileSize - 8, 2);
-          }
         }
       }
 
