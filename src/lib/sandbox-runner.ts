@@ -76,6 +76,14 @@ export interface ExecutionResult {
   stderr?: string;
 }
 
+export interface SingleTestResult {
+  actualOutput: string;
+  passed: boolean;
+  execTimeMs: number;
+  stdout?: string;
+  stderr?: string;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function normalizeLanguage(language: string): SupportedLanguage {
@@ -370,6 +378,63 @@ export async function processSubmissionJob(req: ExecutionRequest): Promise<Execu
       totalTestCases: 1,
       passedTestCases: 0,
       stderr: message,
+    };
+  }
+}
+
+/**
+ * Evaluates a single code snippet, optionally using a driver template.
+ */
+export async function evaluateCodeSnippet(
+  language: string,
+  code: string,
+  input: string,
+  expectedOutput: string,
+  submissionId?: string,
+  dbDriverCode?: string,
+  timeoutMs?: number
+): Promise<SingleTestResult> {
+  const lang = normalizeLanguage(language);
+  if (dbDriverCode && dbDriverCode.includes("{{USER_CODE}}")) {
+    const testCases: BatchTestCase[] = [
+      {
+        args: parseInputToArgs(input),
+        expected: (expectedOutput || "").trim(),
+      },
+    ];
+    const batch = await runBatchTestCases({
+      language: lang,
+      code,
+      driverCode: dbDriverCode,
+      testCases,
+      timeoutMs,
+    });
+    const first = batch.results[0] ?? { passed: false, actual: "", error: "No output" };
+    return {
+      actualOutput: first.actual,
+      passed: first.passed,
+      execTimeMs: batch.execTimeMs,
+      stdout: first.actual,
+      stderr: first.error,
+    };
+  } else {
+    const res = await runInSandbox({
+      language: lang,
+      code,
+      input,
+      timeoutMs,
+    });
+    const actualOutput = res.stdout.trim();
+    const passed =
+      !expectedOutput || expectedOutput === "N/A" || !expectedOutput.trim()
+        ? true
+        : actualOutput === expectedOutput.trim();
+    return {
+      actualOutput,
+      passed,
+      execTimeMs: res.execTimeMs,
+      stdout: res.stdout,
+      stderr: res.stderr || undefined,
     };
   }
 }
