@@ -13,13 +13,12 @@ import Link from "next/link";
 import { getSession } from "@/lib/session";
 import { getStudentProblemsAction } from "@/actions/student-actions";
 
+import { DashboardProfileCard } from "@/components/dashboard/DashboardProfileCard";
+
 export default async function DashboardPage() {
   const session = await getSession();
   const res = await getStudentProblemsAction().catch(() => ({ success: false, data: [] }));
   const problems = res?.success && Array.isArray(res.data) ? res.data : [];
-
-  const userName = session?.name || session?.email?.split("@")[0] || "Engineer";
-  const userInitials = userName.charAt(0).toUpperCase();
 
   return (
     <div style={{ maxWidth: "1240px", margin: "0 auto", display: "flex", flexDirection: "column", gap: "28px" }}>
@@ -50,165 +49,8 @@ export default async function DashboardPage() {
 
       {/* ─── TOP SECTION: 2 EQUAL-WIDTH SECTIONS ─── */}
       <div className="dashboard-two-sections">
-        {/* ─── SECTION 1 (LEFT): PROFILE CARD WITH EDIT BUTTON ON AVATAR (NO BADGES) ─── */}
-        <div
-          style={{
-            position: "relative",
-            backgroundColor: "rgba(18, 18, 22, 0.65)",
-            backdropFilter: "blur(16px)",
-            WebkitBackdropFilter: "blur(16px)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-            borderRadius: "20px",
-            padding: "28px",
-            boxShadow: "0 10px 30px -10px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            gap: "24px",
-          }}
-        >
-          {/* Profile Identity Details (No Badges) */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
-              {/* User Avatar with Edit Button */}
-              <div style={{ position: "relative", display: "inline-block", flexShrink: 0 }}>
-                <div
-                  style={{
-                    width: "60px",
-                    height: "60px",
-                    borderRadius: "18px",
-                    background: "linear-gradient(135deg, #10b981 0%, #064e3b 100%)",
-                    border: "1.5px solid rgba(52, 211, 153, 0.3)",
-                    boxShadow: "0 6px 18px -4px rgba(16, 185, 129, 0.35)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#ffffff",
-                    fontSize: "24px",
-                    fontWeight: 800,
-                  }}
-                >
-                  {userInitials}
-                </div>
-
-                {/* Edit Button on Avatar */}
-                <button
-                  type="button"
-                  title="Edit Profile Avatar"
-                  aria-label="Edit Profile"
-                  style={{
-                    position: "absolute",
-                    bottom: "-4px",
-                    right: "-4px",
-                    width: "24px",
-                    height: "24px",
-                    borderRadius: "50%",
-                    backgroundColor: "#1c1c22",
-                    border: "1.5px solid #3f3f46",
-                    color: "#e4e4e7",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    cursor: "pointer",
-                    boxShadow: "0 2px 6px rgba(0,0,0,0.7)",
-                    transition: "transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease",
-                  }}
-                >
-                  <Pencil size={11} />
-                </button>
-              </div>
-
-              {/* User Text Details (No Badges) */}
-              <div>
-                <span style={{ fontSize: "12px", color: "#a1a1aa", fontWeight: 500, letterSpacing: "0.02em" }}>
-                  Developer Account
-                </span>
-                <h1
-                  style={{
-                    fontSize: "22px",
-                    fontWeight: 800,
-                    color: "#ffffff",
-                    letterSpacing: "-0.02em",
-                    margin: "2px 0 0",
-                    lineHeight: 1.2,
-                  }}
-                >
-                  {userName}
-                </h1>
-                <div style={{ fontSize: "12px", color: "#71717a", fontFamily: "var(--font-mono), monospace", marginTop: "4px" }}>
-                  {session?.email || "student@codemasters.io"}
-                </div>
-              </div>
-            </div>
-
-            {/* Context Box (No Badges) */}
-            <div
-              style={{
-                backgroundColor: "rgba(255, 255, 255, 0.03)",
-                border: "1px solid rgba(255, 255, 255, 0.06)",
-                borderRadius: "14px",
-                padding: "16px",
-              }}
-            >
-              <p style={{ fontSize: "13.5px", color: "#a1a1aa", margin: 0, lineHeight: 1.55 }}>
-                Ready to execute code in isolated container pods. Select a problem from the library to start solving.
-              </p>
-            </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            <Link
-              href="/problems"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "8px",
-                width: "100%",
-                boxSizing: "border-box",
-                padding: "12px 20px",
-                borderRadius: "12px",
-                backgroundColor: "#10b981",
-                color: "#000000",
-                fontWeight: 700,
-                fontSize: "14px",
-                textDecoration: "none",
-                boxShadow: "0 4px 16px rgba(16, 185, 129, 0.35)",
-                transition: "transform 0.15s ease",
-              }}
-            >
-              <Code2 size={16} />
-              <span>Solve Problems</span>
-              <ArrowRight size={14} />
-            </Link>
-
-            {session?.role === "ADMIN" && (
-              <Link
-                href="/admin"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "11px 20px",
-                  borderRadius: "12px",
-                  backgroundColor: "rgba(255, 255, 255, 0.05)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
-                  color: "#ffffff",
-                  fontWeight: 600,
-                  fontSize: "13.5px",
-                  textDecoration: "none",
-                }}
-              >
-                <ShieldAlert size={16} style={{ color: "#fbbf24" }} />
-                <span>Admin Portal</span>
-              </Link>
-            )}
-          </div>
-        </div>
+        {/* ─── SECTION 1 (LEFT): PROFILE CARD WITH INTERACTIVE EDIT POP-UP MODAL (NO BADGES) ─── */}
+        <DashboardProfileCard session={session} />
 
         {/* ─── SECTION 2 (RIGHT): 4 CARDS (EQUAL WIDTH TO LEFT, NO BADGES, NO SVGS) ─── */}
         <div className="stats-2x2-grid">

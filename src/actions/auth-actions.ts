@@ -88,3 +88,33 @@ export async function logoutAction(): Promise<void> {
   await clearSession();
   redirect("/login");
 }
+
+/**
+ * Update current user profile (display name) in Firestore
+ */
+export async function updateCurrentUserProfileAction(
+  name: string
+): Promise<{ success?: boolean; error?: string }> {
+  try {
+    const { getSession } = await import("@/lib/session");
+    const session = await getSession();
+    if (!session?.uid) {
+      return { error: "Unauthorized. Please sign in again." };
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return { error: "Name cannot be empty." };
+    }
+
+    await adminDb.collection("users").doc(session.uid).update({
+      name: trimmedName,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return { success: true };
+  } catch (err: unknown) {
+    console.error("updateCurrentUserProfileAction error:", err);
+    return { error: (err as Error)?.message || "Failed to update profile." };
+  }
+}
